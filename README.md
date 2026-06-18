@@ -42,10 +42,41 @@ cp .env.example .env
 docker compose up -d
 
 # First boot compiles kernels + captures CUDA graphs (~6 min). Watch:
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:5329/health   # 200 = ready
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8000/health   # 200 = ready
 ```
 
-The OpenAI-compatible API is then at `http://localhost:5329/v1`.
+The OpenAI-compatible API is then at `http://localhost:8000/v1`.
+
+## Talking to the model — it's a reasoning model (read this first)
+
+GLM-5.2 **thinks before it answers.** With `--reasoning-parser glm45`, the
+chain-of-thought goes into `message.reasoning` (`delta.reasoning` when streaming)
+and the **final answer appears in `message.content` only after the thinking
+finishes.**
+
+> ⚠️ **The #1 "it returns nothing" gotcha.** A small `max_tokens` is consumed
+> *entirely by the thinking phase*, so the response comes back with
+> `content: null` and `finish_reason: "length"` — the model simply never reached
+> its answer. It looks broken but isn't. **Give it room: set a large
+> `max_tokens` (≥ 2000) or omit it**, and `content` populates as expected.
+
+Verified against the running server:
+
+```bash
+curl -s http://localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model": "GLM-5.2-NVFP4-REAP-469B",
+  "messages": [{"role": "user", "content": "Reply with exactly: PONG"}],
+  "max_tokens": 2000
+}' | python3 -c 'import sys,json; m=json.load(sys.stdin)["choices"][0]["message"]; print("reasoning:", (m.get("reasoning") or "")[:60], "...\ncontent  :", m.get("content"))'
+# reasoning: The user wants me to reply with exactly: PONG ...
+# content  : PONG
+```
+
+| If you see… | Cause | Fix |
+|---|---|---|
+| `content: null`, `finish_reason: "length"` | thinking consumed the whole budget | raise `max_tokens` (≥ 2000) or omit it |
+| empty `content`, you wanted the thinking | it's in `message.reasoning` | read `reasoning` / stream `delta.reasoning` |
+| function calling | `--tool-call-parser glm47` is enabled | parse `message.tool_calls` as usual |
 
 ## Validated configuration
 
@@ -123,3 +154,4 @@ and the final answer in `content`.
 | Garbage / incoherent long-context output | ensure `INDEX_TOPK_PATTERN` is set (57 skip lines on boot) |
 | Hang at NCCL init | keep `NCCL_P2P_DISABLE=1` |
 | Garbage at all lengths | `--kv-cache-dtype fp8` is mandatory on SM120 |
+| Empty / `null` `content` (`finish_reason: length`) | reasoning model ate the token budget | raise `max_tokens` (≥2000) or omit — see [Talking to the model](#talking-to-the-model--its-a-reasoning-model-read-this-first) |

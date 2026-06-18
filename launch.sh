@@ -18,8 +18,9 @@ cd "$(dirname "$0")"
 
 IMAGE="${IMAGE:-voipmonitor/vllm:black-benediction-b12xpr11-vllmbb6c5b7-b12xd90d89c-fi3395b41aa8d-dg324aced12c-cu132-20260608}"
 NAME="${NAME:-glm52-vllm}"
-PORT="${PORT:-5329}"
+PORT="${PORT:-8000}"
 MODEL="${MODEL:-/mnt/llm_models/GLM-5.2-NVFP4-REAP-469B}"
+MODEL_DIR="$(cd "$(dirname "${MODEL}")" && pwd)"  # bind-mounted so any MODEL path works (not just /mnt)
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-GLM-5.2-NVFP4-REAP-469B}"
 
 # --- Hardware: 4x RTX PRO 6000 ---
@@ -133,7 +134,7 @@ exec docker run -d \
   -e TORCHINDUCTOR_CACHE_DIR=/root/.cache/torchinductor \
   -e TORCH_EXTENSIONS_DIR=/cache/jit/torch_extensions \
   -e CUTE_DSL_CACHE_DIR=/root/.cache/cutlass_dsl \
-  -v /mnt:/mnt \
+  -v "${MODEL_DIR}:${MODEL_DIR}:ro" \
   -v "jit-glm52:/cache/jit" \
   -v "${HOME}/.cache/huggingface:/root/.cache/huggingface" \
   --entrypoint /bin/bash \

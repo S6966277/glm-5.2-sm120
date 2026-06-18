@@ -7,7 +7,7 @@ Streaming, NO max_tokens. Measures TTFT, prefill tok/s, decode tok/s per turn.
 """
 import json, time, sys, urllib.request
 
-URL = "http://127.0.0.1:5329/v1/chat/completions"
+URL = "http://127.0.0.1:8000/v1/chat/completions"
 MODEL = "GLM-5.2-NVFP4-REAP-469B"
 
 FACTS = {

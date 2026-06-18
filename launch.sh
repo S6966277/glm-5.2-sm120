@@ -3,18 +3,17 @@ set -euo pipefail
 
 # Load local overrides from .env next to this script (see .env.example).
 cd "$(dirname "$0")"
+RECIPE_DIR="$(pwd)"
 [ -f .env ] && { set -a; . ./.env; set +a; }
 
-# GLM-5.2-NVFP4-REAP-469B on 4x RTX PRO 6000 Blackwell (SM_120)
+# GLM-5.2-NVFP4-REAP-469B on 4x RTX PRO 6000 Blackwell (SM_120)  —  one command.
 #
-# Uses voipmonitor Black Benediction vLLM image — the only image that supports
-# GlmMoeDsaForCausalLM + Glm4MoeMTPModel + B12X_MLA_SPARSE (SM120-native sparse
-# MLA decode) together. Same pattern as the working GLM-5.1 v10 recipe.
+# Uses the voipmonitor Black Benediction vLLM image (public on Docker Hub) — the
+# only image that supports GlmMoeDsaForCausalLM + Glm4MoeMTPModel + B12X_MLA_SPARSE
+# (SM120-native sparse MLA decode) + NVFP4 (modelopt_fp4) MoE together.
 #
-# GLM-5.2 uses DSA (DeepSeek Sparse Attention). vLLM reads index_topk_pattern,
-# NOT config.json's indexer_types, so we inject the pattern via --hf-overrides
-# below (see INDEX_TOPK_PATTERN). Without it, all 78 layers build full indexers
-# and the 57 "S" layers corrupt long-context attention -> garbage.
+# This script launches the server, WAITS until it is healthy, and runs a smoke
+# test, so a green "READY" means it actually works.
 
 IMAGE="${IMAGE:-voipmonitor/vllm:black-benediction-b12xpr11-vllmbb6c5b7-b12xd90d89c-fi3395b41aa8d-dg324aced12c-cu132-20260608}"
 NAME="${NAME:-glm52-vllm}"
@@ -23,42 +22,45 @@ MODEL="${MODEL:-/mnt/llm_models/GLM-5.2-NVFP4-REAP-469B}"
 MODEL_DIR="$(cd "$(dirname "${MODEL}")" && pwd)"  # bind-mounted so any MODEL path works (not just /mnt)
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-GLM-5.2-NVFP4-REAP-469B}"
 
+# --- Reasoning: this is a reasoning model. Thinking is OFF by default so a normal
+# request (even with a small max_tokens) returns a direct answer instead of an
+# empty `content` while the model is still "thinking". Set ENABLE_THINKING=1 for
+# full chain-of-thought (then give requests a generous max_tokens, >=2000). ---
+ENABLE_THINKING="${ENABLE_THINKING:-0}"
+if [[ "${ENABLE_THINKING}" == "1" ]]; then
+  CHAT_TEMPLATE=""                                  # model's native template (thinking on)
+  REASONING_PARSER="glm45"                          # split reasoning vs content
+else
+  CHAT_TEMPLATE="/recipe/chat_template.nothink.jinja"  # thinking off by default
+  REASONING_PARSER=""                               # no parser: the direct answer goes to content
+fi
+
 # --- Hardware: 4x RTX PRO 6000 ---
 TP_SIZE="${TP_SIZE:-4}"
-DCP_SIZE="${DCP_SIZE:-4}"  # shard MLA KV across the 4 GPUs (seq dim) -> ~4x ctx; REQUIRED for 250k.
-                           # Runs as a TP*DCP subgroup on this 4-GPU box (no extra GPUs needed);
-                           # per-step DCP collective rides NCCL SHM/SYS since P2P is disabled.
+DCP_SIZE="${DCP_SIZE:-4}"  # shard MLA KV across the 4 GPUs (seq dim) -> 250k ctx; DCP=1 caps ~177k.
+                           # For a faster <=128k endpoint: DCP_SIZE=1 + MAX_MODEL_LEN=131072.
 
 # --- MTP speculative decoding ---
 MTP="${MTP:-1}"
 NUM_SPECULATIVE_TOKENS="${NUM_SPECULATIVE_TOKENS:-3}"
 
 # --- Memory ---
-# 4x RTX PRO 6000 = 384GB total. Model takes ~78GB/worker (~313GB total).
-# Leaves ~10GB/worker for KV at 0.95 util. With DCP=1 the MLA KV is replicated
-# per TP rank, so 250k needs 14.5GB > 10.3GB free -> OOM (vLLM est max ~177k).
-# DCP=4 shards the KV across the 4 GPUs along the sequence dim -> 710,593-token
-# pool = 2.84x concurrency at 250k (measured). MTP on (3 draft tokens).
-# Confirm via the startup "Maximum concurrency for N tokens per request" log.
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-2}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-250000}"
 
 # --- PCIe allreduce (no NVLink on RTX PRO 6000) ---
-# Disabled for first bring-up: b12x PCIe allreduce deadlocked in NCCL
-# init_model_parallel_group on 4-GPU PCIe. Re-enable once base load works.
 VLLM_ENABLE_PCIE_ALLREDUCE="${VLLM_ENABLE_PCIE_ALLREDUCE:-0}"
 
 # --- Coherence: GLM-5.2 DSA per-layer indexer pattern (F=full, S=share/skip) ---
 # vLLM reads index_topk_pattern (NOT the config's indexer_types). Without it, all
 # 78 layers build full indexers and the 57 "S" layers corrupt long-context
-# attention -> garbage. This 78-char string is derived from config.indexer_types
-# (21 F / 57 S) and matches lukealonso's GLM-5.2-NVFP4 reference exactly.
+# attention -> garbage. 78 chars, 21 F / 57 S.
 INDEX_TOPK_PATTERN="${INDEX_TOPK_PATTERN:-FFFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSS}"
 HF_OVERRIDES=$(printf '{"index_topk_pattern":"%s"}' "${INDEX_TOPK_PATTERN}")
 
-echo "==> Launching GLM-5.2 on Black Benediction (TP=$TP_SIZE DCP=$DCP_SIZE MTP=$MTP)"
+echo "==> Launching GLM-5.2 on Black Benediction (TP=$TP_SIZE DCP=$DCP_SIZE MTP=$MTP thinking=$([[ $ENABLE_THINKING == 1 ]] && echo on || echo off))"
 echo "    Image: $IMAGE"
 echo "    Model: $MODEL"
 echo "    Port:  $PORT"
@@ -75,7 +77,7 @@ else
   SPEC_CONFIG=""
 fi
 
-exec docker run -d \
+docker run -d \
   --gpus all \
   --ipc=host \
   --shm-size=32g \
@@ -111,6 +113,8 @@ exec docker run -d \
   -e NUM_SPECULATIVE_TOKENS="${NUM_SPECULATIVE_TOKENS}" \
   -e MAX_CUDAGRAPH_CAPTURE_SIZE="${MAX_CUDAGRAPH_CAPTURE_SIZE}" \
   -e SPEC_CONFIG="${SPEC_CONFIG:-}" \
+  -e CHAT_TEMPLATE="${CHAT_TEMPLATE}" \
+  -e REASONING_PARSER="${REASONING_PARSER}" \
   -e VLLM_USE_B12X_SPARSE_INDEXER=1 \
   -e VLLM_USE_B12X_MOE=1 \
   -e VLLM_USE_V2_MODEL_RUNNER=1 \
@@ -135,6 +139,7 @@ exec docker run -d \
   -e TORCH_EXTENSIONS_DIR=/cache/jit/torch_extensions \
   -e CUTE_DSL_CACHE_DIR=/root/.cache/cutlass_dsl \
   -v "${MODEL_DIR}:${MODEL_DIR}:ro" \
+  -v "${RECIPE_DIR}:/recipe:ro" \
   -v "jit-glm52:/cache/jit" \
   -v "${HOME}/.cache/huggingface:/root/.cache/huggingface" \
   --entrypoint /bin/bash \
@@ -143,7 +148,11 @@ exec docker run -d \
        cd /; \
        SPEC_ARGS=(); \
        if [ -n \"\${SPEC_CONFIG:-}\" ]; then SPEC_ARGS=(--speculative-config \"\${SPEC_CONFIG}\"); fi; \
-       exec /opt/venv/bin/python -m vllm.entrypoints.cli.main serve '${MODEL}' \
+       CT_ARGS=(); \
+       if [ -n \"\${CHAT_TEMPLATE:-}\" ]; then CT_ARGS=(--chat-template \"\${CHAT_TEMPLATE}\"); fi; \
+       RP_ARGS=(); \
+       if [ -n \"\${REASONING_PARSER:-}\" ]; then RP_ARGS=(--reasoning-parser \"\${REASONING_PARSER}\"); fi; \
+       exec /opt/venv/bin/vllm serve '${MODEL}' \
          --served-model-name '${SERVED_MODEL_NAME}' \
          --trust-remote-code \
          --host 0.0.0.0 \
@@ -167,6 +176,49 @@ exec docker run -d \
          --kv-cache-dtype fp8 \
          --tool-call-parser glm47 \
          --enable-auto-tool-choice \
-         --reasoning-parser glm45 \
+         \"\${RP_ARGS[@]}\" \
          --hf-overrides '${HF_OVERRIDES}' \
+         \"\${CT_ARGS[@]}\" \
          \"\${SPEC_ARGS[@]}\""
+
+# ---- Wait until healthy, then smoke-test, so READY means it actually works ----
+BASE="http://localhost:${PORT}"
+echo "==> Waiting for the server to come up (first boot compiles kernels + captures CUDA graphs, ~6 min)..."
+DEADLINE=$(( $(date +%s) + ${BOOT_TIMEOUT:-1200} ))
+until [ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/health" 2>/dev/null)" = "200" ]; do
+  if ! docker ps --format '{{.Names}}' | grep -qx "${NAME}"; then
+    echo "!! Container exited during boot. Last 40 log lines:"; docker logs --tail 40 "${NAME}" 2>&1 || true
+    exit 1
+  fi
+  if [ "$(date +%s)" -ge "${DEADLINE}" ]; then
+    echo "!! Timed out waiting for /health. Last 40 log lines:"; docker logs --tail 40 "${NAME}" 2>&1 || true
+    exit 1
+  fi
+  sleep 5
+done
+echo "==> /health is 200. Running smoke test..."
+
+SMOKE=$(curl -s "${BASE}/v1/chat/completions" -H 'Content-Type: application/json' -d "{
+  \"model\": \"${SERVED_MODEL_NAME}\",
+  \"messages\": [{\"role\":\"user\",\"content\":\"Reply with exactly: READY\"}],
+  \"max_tokens\": 64, \"temperature\": 0
+}")
+ANSWER=$(printf '%s' "${SMOKE}" | python3 -c 'import sys,json
+try:
+    m=json.load(sys.stdin)["choices"][0]["message"]; print((m.get("content") or "").strip())
+except Exception as e:
+    print("")' 2>/dev/null)
+
+if [ -n "${ANSWER}" ]; then
+  echo ""
+  echo "  ============================================================"
+  echo "  ✅ READY — GLM-5.2 is serving and answered: ${ANSWER}"
+  echo "  Endpoint : ${BASE}/v1   (model: ${SERVED_MODEL_NAME})"
+  echo "  Try it   : ./chat.sh \"write a haiku about GPUs\""
+  echo "  Reasoning: thinking is $([[ ${ENABLE_THINKING} == 1 ]] && echo ON || echo OFF) (set ENABLE_THINKING=1 for chain-of-thought)"
+  echo "  ============================================================"
+else
+  echo "!! Server is up but the smoke test returned empty content. Raw response:"
+  printf '%s\n' "${SMOKE}" | head -c 800; echo
+  exit 1
+fi

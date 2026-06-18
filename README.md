@@ -7,7 +7,7 @@ A turnkey Docker setup to serve **[0xSero/GLM-5.2-NVFP4-REAP-469B](https://huggi
 > **Model:** [huggingface.co/0xSero/GLM-5.2-NVFP4-REAP-469B](https://huggingface.co/0xSero/GLM-5.2-NVFP4-REAP-469B) · ~313 GB on disk (NVFP4) · REAP-pruned 469B MoE · DeepSeek Sparse Attention + MTP.
 
 Validated config: **250k context · concurrency 2 · fp8 KV cache · MTP speculative
-decode · tool-calling + reasoning parsers**.
+decode · tool-calling · thinking off by default (toggle on)**.
 
 ## Hardware target
 
@@ -25,58 +25,67 @@ decode · tool-calling + reasoning parsers**.
   kernel (`B12X_MLA_SPARSE`) + the ModelOpt NVFP4 MoE loader.
 - The model weights on a local path (default `/mnt/llm_models/GLM-5.2-NVFP4-REAP-469B`).
 
-## Quick start
+## Quick start — one command
 
 ```bash
 # 1. Download the weights (~313 GB NVFP4) — needs the hf CLI: pip install -U huggingface_hub
 hf download 0xSero/GLM-5.2-NVFP4-REAP-469B --local-dir /mnt/llm_models/GLM-5.2-NVFP4-REAP-469B
 
-# 2. Configure
-cp .env.example .env
-# edit .env: set MODEL to your weights path (and IMAGE if your tag differs)
+# 2. (optional) point at a different weights path / port
+cp .env.example .env        # defaults already target /mnt/llm_models/... on port 8000
 
-# Option A — script (mounts /mnt, serves the absolute MODEL path)
+# 3. Launch. This starts the server, waits for it, and smoke-tests it.
 ./launch.sh
-
-# Option B — compose (mounts $MODEL at /model)
-docker compose up -d
-
-# First boot compiles kernels + captures CUDA graphs (~6 min). Watch:
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8000/health   # 200 = ready
 ```
 
-The OpenAI-compatible API is then at `http://localhost:8000/v1`.
+`launch.sh` blocks until the server is actually answering, then prints:
 
-## Talking to the model — it's a reasoning model (read this first)
+```
+  ✅ READY — GLM-5.2 is serving and answered: READY
+  Endpoint : http://localhost:8000/v1   (model: GLM-5.2-NVFP4-REAP-469B)
+  Try it   : ./chat.sh "write a haiku about GPUs"
+```
 
-GLM-5.2 **thinks before it answers.** With `--reasoning-parser glm45`, the
-chain-of-thought goes into `message.reasoning` (`delta.reasoning` when streaming)
-and the **final answer appears in `message.content` only after the thinking
-finishes.**
-
-> ⚠️ **The #1 "it returns nothing" gotcha.** A small `max_tokens` is consumed
-> *entirely by the thinking phase*, so the response comes back with
-> `content: null` and `finish_reason: "length"` — the model simply never reached
-> its answer. It looks broken but isn't. **Give it room: set a large
-> `max_tokens` (≥ 2000) or omit it**, and `content` populates as expected.
-
-Verified against the running server:
+(First boot compiles kernels + captures CUDA graphs, ~6 min — `launch.sh` waits it
+out and tails the log if anything fails.) Then talk to it:
 
 ```bash
-curl -s http://localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{
-  "model": "GLM-5.2-NVFP4-REAP-469B",
-  "messages": [{"role": "user", "content": "Reply with exactly: PONG"}],
-  "max_tokens": 2000
-}' | python3 -c 'import sys,json; m=json.load(sys.stdin)["choices"][0]["message"]; print("reasoning:", (m.get("reasoning") or "")[:60], "...\ncontent  :", m.get("content"))'
-# reasoning: The user wants me to reply with exactly: PONG ...
-# content  : PONG
+./chat.sh "explain quicksort in 3 bullet points"
+# or hit the OpenAI-compatible API directly:
+curl -s http://localhost:8000/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"GLM-5.2-NVFP4-REAP-469B","messages":[{"role":"user","content":"hello"}]}'
 ```
 
-| If you see… | Cause | Fix |
+`docker compose up -d` works too (same config; thinking off).
+
+## Reasoning (thinking) — off by default, so it just works
+
+GLM-5.2 is a reasoning model. **Thinking is OFF by default** so a normal request —
+even with a small `max_tokens` — returns a direct answer in `message.content`.
+
+> Why this matters: a reasoning model with thinking *on* spends its token budget
+> "thinking" first. A short `max_tokens` then gets consumed before the answer, so
+> `content` comes back empty (`finish_reason: "length"`). Defaulting thinking off
+> avoids that entirely — the endpoint behaves like any normal chat model.
+
+Want the chain-of-thought (better on hard math/code/logic)? Turn it on:
+
+```bash
+ENABLE_THINKING=1 ./launch.sh          # restart with reasoning enabled
+./chat.sh --think "prove sqrt(2) is irrational"
+```
+
+With `ENABLE_THINKING=1` the server adds `--reasoning-parser glm45`, so the
+chain-of-thought streams into `message.reasoning` and the answer into
+`message.content`. Give thinking requests a generous `max_tokens` (≥ 2000).
+
+| Mode | Default request behaviour | Use when |
 |---|---|---|
-| `content: null`, `finish_reason: "length"` | thinking consumed the whole budget | raise `max_tokens` (≥ 2000) or omit it |
-| empty `content`, you wanted the thinking | it's in `message.reasoning` | read `reasoning` / stream `delta.reasoning` |
-| function calling | `--tool-call-parser glm47` is enabled | parse `message.tool_calls` as usual |
+| **thinking off** *(default)* | answer directly in `content`, any `max_tokens` | general use, agents, tools |
+| **thinking on** (`ENABLE_THINKING=1`) | `reasoning` + `content` split; use `max_tokens` ≥ 2000 | hard reasoning, benchmarks |
+
+Tool calling (`--tool-call-parser glm47`) works in **both** modes — parse
+`message.tool_calls` as usual.
 
 ## Validated configuration
 
@@ -92,7 +101,8 @@ curl -s http://localhost:8000/v1/chat/completions -H 'Content-Type: application/
 | `--moe-backend` | b12x | NVFP4 MoE |
 | `--speculative-config` | mtp, 3 tokens | MTP speculative decode |
 | `--hf-overrides` | `index_topk_pattern` | **coherence-critical** (see below) |
-| `--tool-call-parser` / `--reasoning-parser` | glm47 / glm45 | tool calls + thinking |
+| `--tool-call-parser` | glm47 | tool calls (always on) |
+| `--reasoning-parser` | glm45 | **only** with `ENABLE_THINKING=1` (thinking off by default) |
 
 ### Why `index_topk_pattern` (coherence-critical)
 
@@ -179,4 +189,4 @@ and the final answer in `content`.
 | Garbage / incoherent long-context output | ensure `INDEX_TOPK_PATTERN` is set (57 skip lines on boot) |
 | Hang at NCCL init | keep `NCCL_P2P_DISABLE=1` |
 | Garbage at all lengths | `--kv-cache-dtype fp8` is mandatory on SM120 |
-| Empty / `null` `content` (`finish_reason: length`) | reasoning model ate the token budget | raise `max_tokens` (≥2000) or omit — see [Talking to the model](#talking-to-the-model--its-a-reasoning-model-read-this-first) |
+| Empty / `null` `content` | running with `ENABLE_THINKING=1` + small `max_tokens` (thinking ate the budget) | use the default (thinking off), or raise `max_tokens` ≥ 2000 — see [Reasoning](#reasoning-thinking--off-by-default-so-it-just-works) |

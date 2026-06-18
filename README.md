@@ -1,8 +1,10 @@
 # GLM-5.2-NVFP4-REAP-469B — vLLM serving (4× RTX PRO 6000 Blackwell)
 
-A turnkey Docker setup to serve **GLM-5.2-NVFP4-REAP-469B** (REAP-pruned, NVFP4,
-DeepSeek-Sparse-Attention) on **4× NVIDIA RTX PRO 6000 Blackwell (SM120, 96 GB each)**
-with the `voipmonitor` b12x vLLM image.
+A turnkey Docker setup to serve **[0xSero/GLM-5.2-NVFP4-REAP-469B](https://huggingface.co/0xSero/GLM-5.2-NVFP4-REAP-469B)**
+(REAP-pruned, NVFP4, DeepSeek-Sparse-Attention) on **4× NVIDIA RTX PRO 6000 Blackwell
+(SM120, 96 GB each)** with the `voipmonitor` b12x vLLM image.
+
+> **Model:** [huggingface.co/0xSero/GLM-5.2-NVFP4-REAP-469B](https://huggingface.co/0xSero/GLM-5.2-NVFP4-REAP-469B) · ~313 GB on disk (NVFP4) · REAP-pruned 469B MoE · DeepSeek Sparse Attention + MTP.
 
 Validated config: **250k context · concurrency 2 · fp8 KV cache · MTP speculative
 decode · tool-calling + reasoning parsers**.
@@ -26,6 +28,10 @@ decode · tool-calling + reasoning parsers**.
 ## Quick start
 
 ```bash
+# 1. Download the weights (~313 GB NVFP4) — needs the hf CLI: pip install -U huggingface_hub
+hf download 0xSero/GLM-5.2-NVFP4-REAP-469B --local-dir /mnt/llm_models/GLM-5.2-NVFP4-REAP-469B
+
+# 2. Configure
 cp .env.example .env
 # edit .env: set MODEL to your weights path (and IMAGE if your tag differs)
 

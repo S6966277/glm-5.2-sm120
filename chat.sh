@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 [ -f .env ] && { set -a; . ./.env; set +a; }
 PORT="${PORT:-8000}"
-SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-GLM-5.2-NVFP4-REAP-469B}"
+SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-glm-5.2}"
 
 THINK=0
 if [ "${1:-}" = "--think" ]; then THINK=1; shift; fi

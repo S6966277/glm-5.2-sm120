@@ -20,7 +20,8 @@ NAME="${NAME:-glm52-vllm}"
 PORT="${PORT:-8000}"
 MODEL="${MODEL:-/mnt/llm_models/GLM-5.2-NVFP4-REAP-469B}"
 MODEL_DIR="$(cd "$(dirname "${MODEL}")" && pwd)"  # bind-mounted so any MODEL path works (not just /mnt)
-SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-GLM-5.2-NVFP4-REAP-469B}"
+SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-glm-5.2}"
+MODEL_ALIASES="${MODEL_ALIASES:-GLM-5.2-NVFP4-REAP-469B GLM-5.2}"  # extra ids that also resolve
 
 # --- Reasoning: this is a reasoning model. Thinking is OFF by default so a normal
 # request (even with a small max_tokens) returns a direct answer instead of an
@@ -106,6 +107,7 @@ docker run -d \
   -e PORT="${PORT}" \
   -e MODEL="${MODEL}" \
   -e SERVED_MODEL_NAME="${SERVED_MODEL_NAME}" \
+  -e MODEL_ALIASES="${MODEL_ALIASES}" \
   -e TP_SIZE="${TP_SIZE}" \
   -e DCP_SIZE="${DCP_SIZE}" \
   -e MTP="${MTP}" \
@@ -156,7 +158,7 @@ docker run -d \
        RP_ARGS=(); \
        if [ -n \"\${REASONING_PARSER:-}\" ]; then RP_ARGS=(--reasoning-parser \"\${REASONING_PARSER}\"); fi; \
        exec /opt/venv/bin/vllm serve '${MODEL}' \
-         --served-model-name '${SERVED_MODEL_NAME}' \
+         --served-model-name '${SERVED_MODEL_NAME}' ${MODEL_ALIASES} \
          --trust-remote-code \
          --host 0.0.0.0 \
          --port '${PORT}' \

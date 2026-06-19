@@ -6,8 +6,8 @@ A turnkey Docker setup to serve **[0xSero/GLM-5.2-NVFP4-REAP-469B](https://huggi
 
 > **Model:** [huggingface.co/0xSero/GLM-5.2-NVFP4-REAP-469B](https://huggingface.co/0xSero/GLM-5.2-NVFP4-REAP-469B) · ~313 GB on disk (NVFP4) · REAP-pruned 469B MoE · DeepSeek Sparse Attention + MTP.
 
-Validated config: **250k context · concurrency 2 · fp8 KV cache · MTP speculative
-decode · tool-calling · thinking off by default (toggle on)**.
+Validated config: **DCP=4 · 250k context · ~3× concurrency · ~60 tok/s decode · fp8
+KV cache · MTP speculative decode · tool-calling · thinking off by default (toggle on)**.
 
 ## Hardware target
 
@@ -119,30 +119,27 @@ With DCP=1 the MLA KV cache is replicated per TP rank, so a single 250k request 
 ~14.5 GB but only ~10.3 GB/GPU is free → OOM (max ~177k). `decode-context-parallel-size=4`
 shards the KV across the 4 GPUs along the sequence dim, yielding a 710,593-token pool.
 
-### Choosing DCP — context vs speed (measured on this box)
+### DCP=4 is the recipe — 250k context at ~3× concurrency
 
-`DCP=4` is the default because it unlocks **250k context + 2.84× concurrency**.
-But sharding the MLA KV across 4 GPUs has a real throughput cost — **decode is
-~1.6× slower than DCP=1.** If you don't need long context, drop DCP.
+`DCP=4` is the default and the validated flagship: **250k context · ~3× concurrency
+(710,593-token KV pool) · ~60 tok/s decode** (warm, with MTP). Sharding the MLA KV
+across the 4 GPUs along the sequence dim is what makes 250k fit at all.
 
-| `DCP_SIZE` | Max context | KV pool @ max | Decode (single) | Concurrency | When to use |
+| `DCP_SIZE` | Max context | KV pool @ max | Concurrency | Decode (warm) | |
 |---|---|---|---|---|---|
-| **1** | ~131k (OOM > ~177k) | ~178k tok | **~81 tok/s** | 1.36× | ≤128k context, want max speed |
-| 2 | 250k | ~355k tok | ~49 tok/s | 1.42× | middle ground |
-| **4** *(default)* | 250k | 710,593 tok | ~50 tok/s | **2.84×** | long context / high concurrency |
+| **4** *(default)* | **250000** | **710,593 tok** | **~3× (2.84×)** | **~60 tok/s** | **the recipe** |
+| 2 | 250000 | ~355k tok | 1.42× | ~49 tok/s | middle ground |
+| 1 | ~131k (OOM > ~177k) | ~178k tok | 1.36× | ~81 tok/s | optional: smaller ctx, faster |
 
-> Measured at temp 0, b12x, MTP=3, fp8 KV. Decode tok/s is steady-state (reliable);
-> **cold TTFT is compile-dominated** — the first request at a new prompt length
-> JIT-compiles that size bucket (tens of seconds), then warm/prefix-cache hits are
-> fast (see [Performance](#performance-measured-warm)). So a slow *first* request is
-> the kernel cache warming up, **not** a hang.
+> Measured at temp 0, b12x, MTP=3, fp8 KV. Decode is steady-state and
+> MTP-acceptance-dependent (~60 tok/s warm short ctx). **Cold TTFT is
+> compile-dominated** — the first request at a new prompt length JIT-compiles that
+> size bucket (tens of seconds), then warm / prefix-cache hits are fast. A slow
+> *first* request is the kernel cache warming up, **not** a hang.
 
-**For a fast ≤128k endpoint**, set in `.env`:
-
-```bash
-DCP_SIZE=1
-MAX_MODEL_LEN=131072
-```
+Only if you specifically want a smaller, faster ≤128k box instead, set `DCP_SIZE=1`
++ `MAX_MODEL_LEN=131072` in `.env` (~81 tok/s, but caps at ~131k and loses the
+250k / ~3× headroom).
 
 ### Why `NCCL_P2P_DISABLE=1`
 
@@ -153,10 +150,10 @@ init without P2P disabled.
 
 | Metric | Value |
 |---|---|
-| Decode | ~50–54 tok/s (short ctx), ~40 tok/s @ 64k–100k |
+| Decode | **~60 tok/s** (short ctx, warm, MTP), ~45 tok/s @ 64k–100k |
 | Prefill | ~5,100 tok/s @ 64k (warm); ~45k–65k tok/s on prefix-cache hits |
 | TTFT | sub-second (short ctx); ~12 s for a fresh uncached 64k prefill |
-| Concurrency | 2.84× at 250k |
+| Concurrency | **~3× (2.84×) at 250k** (710,593-token KV pool) |
 
 > First touch of a brand-new long prefix incurs a one-time compile of that size
 > bucket (e.g. ~195 s for a fresh 99.5k prompt). Subsequent same-size prefills and

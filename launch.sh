@@ -27,7 +27,7 @@ MODEL_ALIASES="${MODEL_ALIASES:-GLM-5.2-NVFP4-REAP-469B GLM-5.2}"  # extra ids t
 # request (even with a small max_tokens) returns a direct answer instead of an
 # empty `content` while the model is still "thinking". Set ENABLE_THINKING=1 for
 # full chain-of-thought (then give requests a generous max_tokens, >=2000). ---
-ENABLE_THINKING="${ENABLE_THINKING:-0}"
+ENABLE_THINKING="${ENABLE_THINKING:-1}"
 if [[ "${ENABLE_THINKING}" == "1" ]]; then
   CHAT_TEMPLATE=""                                  # model's native template (thinking on)
   REASONING_PARSER="glm45"                          # split reasoning vs content

@@ -73,9 +73,8 @@ services:
         --max-num-batched-tokens ${MAX_NUM_BATCHED_TOKENS:-8192} --max-num-seqs ${MAX_NUM_SEQS:-2}
         --max-cudagraph-capture-size 8 --max-model-len ${MAX_MODEL_LEN:-250000}
         --quantization modelopt_fp4 --attention-backend B12X_MLA_SPARSE --moe-backend b12x
-        --kv-cache-dtype fp8 --tool-call-parser glm47 --enable-auto-tool-choice
+        --kv-cache-dtype fp8 --tool-call-parser glm47 --enable-auto-tool-choice --reasoning-parser glm45
         --hf-overrides '{"index_topk_pattern":"FFFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSSFSSS"}'
-        --chat-template /recipe/chat_template.nothink.jinja
         --speculative-config '{"model":"/model","method":"mtp","num_speculative_tokens":3,"moe_backend":"b12x","draft_sample_method":"probabilistic"}'
 
 volumes:

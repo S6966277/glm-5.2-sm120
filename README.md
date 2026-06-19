@@ -7,7 +7,7 @@ A turnkey Docker setup to serve **[0xSero/GLM-5.2-NVFP4-REAP-469B](https://huggi
 > **Model:** [huggingface.co/0xSero/GLM-5.2-NVFP4-REAP-469B](https://huggingface.co/0xSero/GLM-5.2-NVFP4-REAP-469B) · ~313 GB on disk (NVFP4) · REAP-pruned 469B MoE · DeepSeek Sparse Attention + MTP.
 
 Validated config: **DCP=4 · 250k context · ~3× concurrency · ~60 tok/s decode · fp8
-KV cache · MTP speculative decode · tool-calling · thinking off by default (toggle on)**.
+KV cache · MTP speculative decode · tool-calling · reasoning on by default (toggle off)**.
 
 ## Hardware target
 
@@ -58,34 +58,39 @@ curl -s http://localhost:8000/v1/chat/completions -H 'Content-Type: application/
 
 `docker compose up -d` works too (same config; thinking off).
 
-## Reasoning (thinking) — off by default, so it just works
+## Reasoning (thinking) — on by default
 
-GLM-5.2 is a reasoning model. **Thinking is OFF by default** so a normal request —
-even with a small `max_tokens` — returns a direct answer in `message.content`.
-
-> Why this matters: a reasoning model with thinking *on* spends its token budget
-> "thinking" first. A short `max_tokens` then gets consumed before the answer, so
-> `content` comes back empty (`finish_reason: "length"`). Defaulting thinking off
-> avoids that entirely — the endpoint behaves like any normal chat model.
-
-Want the chain-of-thought (better on hard math/code/logic)? Turn it on:
+GLM-5.2 is a reasoning model, so **thinking is ON by default.** The chain-of-thought
+streams into `message.reasoning` (`delta.reasoning` when streaming) and the final
+answer into `message.content`.
 
 ```bash
-ENABLE_THINKING=1 ./launch.sh          # restart with reasoning enabled
-./chat.sh --think "prove sqrt(2) is irrational"
+curl -s http://localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model": "glm-5.2",
+  "messages": [{"role":"user","content":"Is 91 prime? Think it through."}],
+  "max_tokens": 2000
+}' | python3 -c 'import sys,json; m=json.load(sys.stdin)["choices"][0]["message"]; print("reasoning:", (m.get("reasoning") or "")[:120], "...\ncontent  :", m.get("content"))'
 ```
 
-With `ENABLE_THINKING=1` the server adds `--reasoning-parser glm45`, so the
-chain-of-thought streams into `message.reasoning` and the answer into
-`message.content`. Give thinking requests a generous `max_tokens` (≥ 2000).
+> ⚠️ **Give it room.** Thinking spends tokens *before* the answer, so a small
+> `max_tokens` gets consumed mid-thought and `content` comes back empty
+> (`finish_reason: "length"`) — the reasoning is still in `message.reasoning`.
+> Use `max_tokens` ≥ 2000 (or omit it) and you get both.
 
-| Mode | Default request behaviour | Use when |
+Don't want the thinking (snappy direct answers, no empty-content risk for tiny
+`max_tokens`)? Turn it off:
+
+```bash
+ENABLE_THINKING=0 ./launch.sh          # restart without reasoning
+```
+
+| Mode | Behaviour | Use when |
 |---|---|---|
-| **thinking off** *(default)* | answer directly in `content`, any `max_tokens` | general use, agents, tools |
-| **thinking on** (`ENABLE_THINKING=1`) | `reasoning` + `content` split; use `max_tokens` ≥ 2000 | hard reasoning, benchmarks |
+| **reasoning on** *(default)* | `reasoning` + `content` split; use `max_tokens` ≥ 2000 | general use, hard math/code/logic |
+| **reasoning off** (`ENABLE_THINKING=0`) | answer directly in `content`, any `max_tokens` | agents/UIs that cap `max_tokens` low |
 
-Tool calling (`--tool-call-parser glm47`) works in **both** modes — parse
-`message.tool_calls` as usual.
+`./chat.sh "..."` shows the thinking (dimmed) above the answer. Tool calling
+(`--tool-call-parser glm47`) works in **both** modes.
 
 ## Validated configuration
 
@@ -102,7 +107,7 @@ Tool calling (`--tool-call-parser glm47`) works in **both** modes — parse
 | `--speculative-config` | mtp, 3 tokens | MTP speculative decode |
 | `--hf-overrides` | `index_topk_pattern` | **coherence-critical** (see below) |
 | `--tool-call-parser` | glm47 | tool calls (always on) |
-| `--reasoning-parser` | glm45 | **only** with `ENABLE_THINKING=1` (thinking off by default) |
+| `--reasoning-parser` | glm45 | on by default; omitted only with `ENABLE_THINKING=0` |
 
 ### Why `index_topk_pattern` (coherence-critical)
 
@@ -210,4 +215,4 @@ and the final answer in `content`.
 | Garbage / incoherent long-context output | ensure `INDEX_TOPK_PATTERN` is set (57 skip lines on boot) |
 | Hang at NCCL init | keep `NCCL_P2P_DISABLE=1` |
 | Garbage at all lengths | `--kv-cache-dtype fp8` is mandatory on SM120 |
-| Empty / `null` `content` | running with `ENABLE_THINKING=1` + small `max_tokens` (thinking ate the budget) | use the default (thinking off), or raise `max_tokens` ≥ 2000 — see [Reasoning](#reasoning-thinking--off-by-default-so-it-just-works) |
+| Empty / `null` `content` (`finish_reason: length`) | thinking ate the token budget | raise `max_tokens` ≥ 2000 (or omit), or run `ENABLE_THINKING=0` — see [Reasoning](#reasoning-thinking--on-by-default) |

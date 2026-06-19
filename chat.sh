@@ -39,7 +39,7 @@ with urllib.request.urlopen(req,timeout=1800) as r:
         for ch in obj.get("choices",[]):
             d=ch.get("delta",{}) or {}
             rt=d.get("reasoning") or d.get("reasoning_content")
-            if rt and think:
+            if rt:
                 if not in_think: sys.stderr.write("\033[2m[thinking] "); in_think=True
                 sys.stderr.write(rt); sys.stderr.flush()
             c=d.get("content")

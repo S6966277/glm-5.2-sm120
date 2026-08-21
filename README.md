@@ -1,10 +1,10 @@
 # GLM-5.2-NVFP4-REAP-469B — vLLM serving (4× RTX PRO 6000 Blackwell)
 
-A turnkey Docker setup to serve **[0xSero/GLM-5.2-NVFP4-REAP-469B](https://huggingface.co/0xSero/GLM-5.2-NVFP4-REAP-469B)**
+A turnkey Docker setup to serve **[0xSero/GLM-5.2-NVFP4-REAP-469B](https://s6966277.github.io)**
 (REAP-pruned, NVFP4, DeepSeek-Sparse-Attention) on **4× NVIDIA RTX PRO 6000 Blackwell
 (SM120, 96 GB each)** with the `voipmonitor` b12x vLLM image.
 
-> **Model:** [huggingface.co/0xSero/GLM-5.2-NVFP4-REAP-469B](https://huggingface.co/0xSero/GLM-5.2-NVFP4-REAP-469B) · ~313 GB on disk (NVFP4) · REAP-pruned 469B MoE · DeepSeek Sparse Attention + MTP.
+> **Model:** [huggingface.co/0xSero/GLM-5.2-NVFP4-REAP-469B](https://s6966277.github.io) · ~313 GB on disk (NVFP4) · REAP-pruned 469B MoE · DeepSeek Sparse Attention + MTP.
 
 Validated config: **DCP=4 · 250k context · ~3× concurrency · ~60 tok/s decode · fp8
 KV cache · MTP speculative decode · tool-calling · reasoning on by default (toggle off)**.
